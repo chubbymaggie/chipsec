@@ -134,6 +134,34 @@
     <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
 
     <!-- PCH SPIBAR registers -->
+    <register name="FREG0_FLASHD" type="mmio" bar="SPIBAR" offset="0x54" size="4" desc="Flash Region 0 (Flash Descriptor)">
+      <field name="RB" bit="0"  size="15" desc="Region Base"/>
+      <field name="RL" bit="16" size="15" desc="Region Limit"/>
+    </register>
+    <register name="FREG1_BIOS" type="mmio" bar="SPIBAR" offset="0x58" size="4" desc="Flash Region 1 (BIOS)">
+      <field name="RB" bit="0"  size="15" desc="Region Base"/>
+      <field name="RL" bit="16" size="15" desc="Region Limit"/>
+    </register>
+    <register name="FREG2_ME" type="mmio" bar="SPIBAR" offset="0x5C" size="4" desc="Flash Region 2 (ME)">
+      <field name="RB" bit="0"  size="15" desc="Region Base"/>
+      <field name="RL" bit="16" size="15" desc="Region Limit"/>
+    </register>
+    <register name="FREG3_GBE" type="mmio" bar="SPIBAR" offset="0x60" size="4" desc="Flash Region 3 (GBe)">
+      <field name="RB" bit="0"  size="15" desc="Region Base"/>
+      <field name="RL" bit="16" size="15" desc="Region Limit"/>
+    </register>
+    <register name="FREG4_PD" type="mmio" bar="SPIBAR" offset="0x64" size="4" desc="Flash Region 4 (Platform Data)">
+      <field name="RB" bit="0"  size="15" desc="Region Base"/>
+      <field name="RL" bit="16" size="15" desc="Region Limit"/>
+    </register>
+    <register name="FREG5" type="mmio" bar="SPIBAR" offset="0x68" size="4" desc="Flash Region 5">
+      <field name="RB" bit="0"  size="15" desc="Region Base"/>
+      <field name="RL" bit="16" size="15" desc="Region Limit"/>
+    </register>
+    <register name="FREG6" type="mmio" bar="SPIBAR" offset="0x6C" size="4" desc="Flash Region 6">
+      <field name="RB" bit="0"  size="15" desc="Region Base"/>
+      <field name="RL" bit="16" size="15" desc="Region Limit"/>
+    </register>
     <register name="PR0" type="mmio" bar="SPIBAR" offset="0x84" size="4" desc="Protected Range 0">
       <field name="PRB" bit="0"  size="13"/>
       <field name="RPE" bit="15" size="1"/>
@@ -181,11 +209,14 @@
     </register>  
 
     <!-- PCH RTC registers -->
-    <register name="RC" type="msgbus" port="0xC3" offset="0x3400" size="4" desc="RTC Configuration">
+    <register name="RC" type="mm_msgbus" port="0xC3" offset="0x3400" size="4" desc="RTC Configuration">
       <field name="UE"   bit="2"  size="1" desc="Upper 128 Byte Enable"/>
       <field name="LL"   bit="3"  size="1" desc="Lower 128 Byte Lock"/>
       <field name="UL"   bit="4"  size="1" desc="Upper 128 Byte Lock"/>
       <field name="BILD" bit="31" size="1" desc="BIOS Interface Lock-Down"/>
+    </register>
+    <register name="BUC" type="mm_msgbus" port="0xC3" offset="0x3414" size="4" desc="Backed Up Control">
+      <field name="TS" bit="0" size="1" desc="Top Swap"/>
     </register>
 
     <!-- PMC MMIO registers (6th Generation Intel(R) Processor I/O Datasheet for U/Y-Platforms, Vol. 2, section 4.3) -->
