@@ -32,6 +32,8 @@ Abstract:
 #define THRESHOLD 3
 #define CODE_BIT  16
 #define BAD_TABLE - 1
+#define MPTTABLESIZE 256u
+#define MCTABLESIZE 4096u
 
 //
 // C: Char&Len Set; P: Position Set; T: exTra Set
@@ -49,6 +51,7 @@ Abstract:
 #define NPT MAXNP
 #endif
 
+
 typedef struct {
   UINT8   *mSrcBase;  // Starting address of compressed data
   UINT8   *mDstBase;  // Starting address of decompressed data
@@ -61,15 +64,18 @@ typedef struct {
   UINT16  mBlockSize;
   UINT32  mCompSize;
   UINT32  mOrigSize;
+  UINT32  mSrcSize;
 
   UINT16  mBadTableFlag;
+  UINT16  mBadAlgorithm;
 
   UINT16  mLeft[2 * NC - 1];
   UINT16  mRight[2 * NC - 1];
   UINT8   mCLen[NC];
   UINT8   mPTLen[NPT];
-  UINT16  mCTable[4096];
-  UINT16  mPTTable[256];
+  UINT16  mCTable[MCTABLESIZE];
+  UINT16  mPTTable[MPTTABLESIZE];
+
 } SCRATCH_DATA;
 
 STATIC UINT16 mPbit = EFIPBIT;
@@ -107,6 +113,11 @@ Returns: (VOID)
       //
       Sd->mCompSize--;
       Sd->mSubBitBuf  = 0;
+      if(Sd->mInBuf >= Sd->mSrcSize)
+      {
+        Sd->mBadAlgorithm = 1;
+        return;
+      }
       Sd->mSubBitBuf  = Sd->mSrcBase[Sd->mInBuf++];
       Sd->mBitCount   = 8;
 
@@ -192,6 +203,7 @@ Returns:
   UINT16  Weight[17];
   UINT16  Start[18];
   UINT16  *Pointer;
+  UINT16  TableSize;
   UINT16  Index3;
   UINT16  Index;
   UINT16  Len;
@@ -200,6 +212,8 @@ Returns:
   UINT16  Avail;
   UINT16  NextCode;
   UINT16  Mask;
+
+  TableSize = (UINT16) (1U << TableBits);
 
   for (Index = 1; Index <= 16; Index++) {
     Count[Index] = 0;
@@ -235,8 +249,7 @@ Returns:
   Index = (UINT16) (Start[TableBits + 1] >> JuBits);
 
   if (Index != 0) {
-    Index3 = (UINT16) (1U << TableBits);
-    while (Index != Index3) {
+    while (Index != TableSize) {
       Table[Index++] = 0;
     }
   }
@@ -256,9 +269,13 @@ Returns:
     if (Len <= TableBits) {
 
       for (Index = Start[Len]; Index < NextCode; Index++) {
+        if(Index >= TableSize)
+        {
+          Sd->mBadAlgorithm = 1;
+          return (UINT16) BAD_TABLE;
+        }
         Table[Index] = Char;
       }
-
     } else {
 
       Index3  = Start[Len];
@@ -267,7 +284,7 @@ Returns:
 
       while (Index != 0) {
         if (*Pointer == 0) {
-          Sd->mRight[Avail]                     = Sd->mLeft[Avail] = 0;
+          Sd->mRight[Avail] = Sd->mLeft[Avail] = 0;
           *Pointer = Avail++;
         }
 
@@ -399,6 +416,8 @@ Returns:
   Index = 0;
 
   while (Index < Number) {
+
+
 
     CharC = (UINT16) (Sd->mBitBuf >> (BITBUFSIZ - 3));
 
@@ -613,14 +632,14 @@ Returns: (VOID)
  --*/
 {
   UINT16  BytesRemain;
-  UINT32  DataIdx;
+  UINT64  DataIdx;
   UINT16  CharC;
 
   BytesRemain = (UINT16) (-1);
 
   DataIdx     = 0;
 
-  for (;;) {
+  while(1) {
     CharC = DecodeC (Sd);
     if (Sd->mBadTableFlag != 0) {
       return ;
@@ -644,24 +663,23 @@ Returns: (VOID)
       BytesRemain = CharC;
 
       DataIdx     = Sd->mOutBuf - DecodeP (Sd) - 1;
-
       // If this is not the correct decompression algorithm, this is an overflow possibility.
       if (DataIdx > Sd->mOrigSize) {
-        return ;
+        Sd->mBadAlgorithm = 1;
+        return;
       }
 
       BytesRemain--;
       while ((INT16) (BytesRemain) >= 0) {
         Sd->mDstBase[Sd->mOutBuf++] = Sd->mDstBase[DataIdx++];
         if (Sd->mOutBuf >= Sd->mOrigSize) {
-          return ;
+          return;
         }
-
         BytesRemain--;
       }
     }
   }
-  return ;
+  return;
 }
 
 EFI_STATUS
@@ -713,7 +731,7 @@ Decompress (
   IN OUT  VOID    *Scratch,
   IN      UINT32  ScratchSize
   )
-/*++
+/*
 
 Routine Description:
 
@@ -760,7 +778,7 @@ Returns:
   CompSize  = Src[0] + (Src[1] << 8) + (Src[2] << 16) + (Src[3] << 24);
   OrigSize  = Src[4] + (Src[5] << 8) + (Src[6] << 16) + (Src[7] << 24);
 
-  if (SrcSize < CompSize + 8) {
+  if (SrcSize < CompSize + 8 || (CompSize + 8) < 8) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -770,7 +788,7 @@ Returns:
 
   Src = Src + 8;
 
-  for (Index = 0; Index < sizeof (SCRATCH_DATA); Index++) {
+  for (Index = 0; Index < ScratchSize; Index++) {
     ((UINT8 *) Sd)[Index] = 0;
   }
 
@@ -778,6 +796,7 @@ Returns:
   Sd->mDstBase  = Dst;
   Sd->mCompSize = CompSize;
   Sd->mOrigSize = OrigSize;
+  Sd->mSrcSize  = SrcSize;
 
   //
   // Fill the first BITBUFSIZ bits
@@ -789,13 +808,12 @@ Returns:
   //
   Decode (Sd);
 
-  if (Sd->mBadTableFlag != 0) {
+  if (Sd->mBadTableFlag != 0 || Sd->mBadAlgorithm != 0) {
     //
     // Something wrong with the source
     //
     Status = EFI_INVALID_PARAMETER;
   }
-
   return Status;
 }
 
@@ -928,5 +946,3 @@ Returns:
   mPbit = MAXPBIT;
   return Decompress (Source, SrcSize, Destination, DstSize, Scratch, ScratchSize);
 }
-
-

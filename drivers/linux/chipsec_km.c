@@ -1,6 +1,6 @@
 /* 
 CHIPSEC: Platform Security Assessment Framework
-Copyright (c) 2010-2014, Intel Corporation
+Copyright (c) 2010-2018, Intel Corporation
  
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -543,6 +543,13 @@ int __weak phys_mem_access_prot_allowed(struct file *file,
 {
         return 1;
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,4)
+int valid_mmap_phys_addr_range(unsigned long pfn, size_t size)
+{
+	return 1;
+}
+#endif
 
 #ifndef ARCH_HAS_VALID_PHYS_ADDR_RANGE
 static inline int valid_phys_addr_range(phys_addr_t addr, size_t count)
@@ -1254,6 +1261,78 @@ static long d_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioc
 
         break;
     }
+
+	case IOCTL_READ_PHYSMEM:
+	{
+		// IN params : physical address, length
+		// OUT params : ptr to buffer
+		uint64_t NumberofBytes = 0;
+		phys_addr_t pa;
+		void *va; 
+
+		NumberofBytes = 0;
+		numargs = 3;
+
+		printk( KERN_INFO "[chipsec] > READMEM\n");
+
+		if(copy_from_user((void*)ptrbuf, (void*)ioctl_param, (sizeof(long) * numargs)) > 0)
+		{
+			printk( KERN_ALERT "[chipsec] ERROR: STATUS_INVALID_PARAMETER\n" );
+			return -EFAULT;
+		}
+
+		pa = ptr[0];
+		va = my_xlate_dev_mem_ptr(pa);
+		NumberofBytes = ptr[1];
+
+		if ( copy_to_user((void*)ioctl_param,va,NumberofBytes) > 0){
+			printk( KERN_ALERT "[chipsec] ERROR: STATUS_UNSUCCESSFUL - could not read memory");
+			my_unxlate_dev_mem_ptr(pa,va);
+			return -EFAULT;
+		}
+		my_unxlate_dev_mem_ptr(pa,va);
+		break;
+	}
+
+	case IOCTL_WRITE_PHYSMEM:
+	{
+		// IN params : physical address, length, ptr to buffer
+		// OUT params : length
+		uint64_t 	NumberofBytes;
+		phys_addr_t 	pa;
+		char 		*va;
+		char		*buffer; 
+		uint64_t	i;
+
+		NumberofBytes = 0;
+		numargs = 3;
+
+		printk( KERN_INFO "[chipsec] > WRITEMEM\n");
+
+		if(copy_from_user((void*)ptrbuf, (void*)ioctl_param, (sizeof(long) * numargs)) > 0)
+		{
+			printk( KERN_ALERT "[chipsec] ERROR: STATUS_INVALID_PARAMETER\n" );
+			return -EFAULT;
+		}
+
+		pa = ptr[0];
+		va = my_xlate_dev_mem_ptr(pa);
+		NumberofBytes = ptr[1];
+		buffer = (void*)&ptr[2];
+
+		//Copy from user was causing issues 
+		for(i=0;i<NumberofBytes;i++){
+			va[i] = buffer[i];
+		}
+
+		my_unxlate_dev_mem_ptr(pa,va);
+		printk( KERN_INFO "[chipsec] : Number of Bytes written %llu\n", NumberofBytes);
+		if (copy_to_user( (void*)ioctl_param,&NumberofBytes,sizeof(NumberofBytes)) > 0){
+			printk (KERN_ALERT "[chipsec] ERROR: STATUS_UNSUCCESSFUL -error trying to write memory");
+			return -EFAULT;
+		} 
+		break;
+	}
    
 #ifdef EFI_NOT_READY
 	case IOCTL_GET_EFIVAR:
@@ -1530,7 +1609,7 @@ static long d_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioc
 
         case IOCTL_WRMMIO:
 	{
-        unsigned long addr, value;
+        unsigned long addr, value, first, second;
         char *ioaddr;
 		
         numargs = 3;
@@ -1558,8 +1637,11 @@ static long d_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioc
 				break;
             case 8:
             #ifdef __x86_64__
-                iowrite32( ( value >> 32 ) & 0xFFFFFFFF, ioaddr );
-                iowrite32( value & 0xFFFFFFFF, ioaddr + 4 );
+                first = value & 0xFFFFFFFF;
+                second = (value >> 32) & 0xFFFFFFFF;
+
+                iowrite32(first, ioaddr);
+                iowrite32(second, ioaddr + 4);
             #endif
                 break;
 		}

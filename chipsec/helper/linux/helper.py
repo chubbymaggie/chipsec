@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #CHIPSEC: Platform Security Assessment Framework
-#Copyright (c) 2010-2015, Intel Corporation
-# 
+#Copyright (c) 2010-2018, Intel Corporation
+#
 #This program is free software; you can redistribute it and/or
 #modify it under the terms of the GNU General Public License
 #as published by the Free Software Foundation; Version 2.
@@ -19,13 +19,10 @@
 #chipsec@intel.com
 #
 
-
-
-
 # -------------------------------------------------------------------------------
 #
 # CHIPSEC: Platform Hardware Security Assessment Framework
-# (c) 2010-2012 Intel Corporation
+# (c) 2010-2018 Intel Corporation
 #
 # -------------------------------------------------------------------------------
 
@@ -80,10 +77,12 @@ IOCTL_WRMMIO                   = 0x13
 IOCTL_VA2PA                    = 0x14
 IOCTL_MSGBUS_SEND_MESSAGE      = 0x15
 IOCTL_FREE_PHYSMEM             = 0x16
+IOCTL_READ_PHYSMEM             = 0x17
+IOCTL_WRITE_PHYSMEM            = 0x18
 
 LZMA  = efi_compressor.LzmaDecompress
 Tiano = efi_compressor.TianoDecompress
-EFI   = efi_compressor.EfiDecompress 
+EFI   = efi_compressor.EfiDecompress
 
 
 class MemoryMapping(mmap.mmap):
@@ -107,6 +106,9 @@ class LinuxHelper(Helper):
     SUPPORT_KERNEL26_GET_PHYS_MEM_ACCESS_PROT = False
     DKMS_DIR = "/var/lib/dkms/"
 
+    decompression_oder_type1 = [Tiano, EFI]
+    decompression_oder_type2 = [LZMA, Tiano, EFI]
+
     def __init__(self):
         super(LinuxHelper, self).__init__()
         self.os_system  = platform.system()
@@ -127,7 +129,7 @@ class LinuxHelper(Helper):
 ###############################################################################################
 # Driver/service management functions
 ###############################################################################################
-   
+
     def get_dkms_module_location(self):
         version     = defines.get_version()
         from os import listdir
@@ -149,14 +151,14 @@ class LinuxHelper(Helper):
                 if logger().VERBOSE:
                     logger().log("Cannot find symbol 'page_is_ram'")
             else:
-                a1 = "a1=0x%s" % page_is_ram 
+                a1 = "a1=0x%s" % page_is_ram
         if self.SUPPORT_KERNEL26_GET_PHYS_MEM_ACCESS_PROT:
             phys_mem_access_prot = self.get_phys_mem_access_prot()
             if not phys_mem_access_prot:
                 if logger().VERBOSE:
                     logger().log("Cannot find symbol 'phys_mem_access_prot'")
             else:
-                a2 = "a2=0x%s" % phys_mem_access_prot 
+                a2 = "a2=0x%s" % phys_mem_access_prot
 
         driver_path = os.path.join(chipsec.file.get_main_dir(), "chipsec", "helper" ,"linux", "chipsec.ko" )
         if not os.path.exists(driver_path):
@@ -264,8 +266,8 @@ class LinuxHelper(Helper):
         """Check if /dev/cpu/CPUNUM/msr is usable.
 
            In case the driver is not loaded, we might be able to perform the
-           requested operation via /dev/cpu/CPUNUM/msr. This requires loading 
-           the (more standard) msr driver. Returns True if /dev/cpu/CPUNUM/msr 
+           requested operation via /dev/cpu/CPUNUM/msr. This requires loading
+           the (more standard) msr driver. Returns True if /dev/cpu/CPUNUM/msr
            is accessible.
         """
         if self.dev_msr:
@@ -340,8 +342,10 @@ class LinuxHelper(Helper):
     def write_phys_mem(self, phys_address_hi, phys_address_lo, length, newval):
         if newval is None: return None
         addr = (phys_address_hi << 32) | phys_address_lo
-        self.dev_fh.seek(addr)
-        return self.__mem_block(length, newval)
+        in_buf = struct.pack('2'+self._pack,addr,length)+str(newval)
+        out_buf = self.ioctl(IOCTL_WRITE_PHYSMEM, in_buf)
+        res = struct.unpack('Q',out_buf[:8])
+        return res[0]
 
     def native_write_phys_mem(self, phys_address_hi, phys_address_lo, length, newval):
         if newval is None: return None
@@ -354,8 +358,12 @@ class LinuxHelper(Helper):
 
     def read_phys_mem(self, phys_address_hi, phys_address_lo, length):
         addr = (phys_address_hi << 32) | phys_address_lo
-        self.dev_fh.seek(addr)
-        return self.__mem_block(length)
+        in_buf = struct.pack( '3'+self._pack,addr,length,0 )
+        if len(in_buf) < length:
+            in_buf += (length - len(in_buf)) * 'A'
+        out_buf = self.ioctl(IOCTL_READ_PHYSMEM, in_buf)
+        ret = struct.unpack(str(length)+'s', out_buf[:length])
+        return ret[0]
 
     def native_read_phys_mem(self, phys_address_hi, phys_address_lo, length):
         if self.devmem_available():
@@ -373,7 +381,7 @@ class LinuxHelper(Helper):
         #Check if PA > max physical address
         max_pa = self.cpuid( 0x80000008 , 0x0 )[0] & 0xFF
         if pa > 1<<max_pa:
-            print "[helper] Error in va2pa: PA higher that max physical address: VA (0x%016X) -> PA (0x%016X)"% (va, pa) 
+            print "[helper] Error in va2pa: PA higher that max physical address: VA (0x%016X) -> PA (0x%016X)"% (va, pa)
             error_code = 1
         return (pa,error_code)
 
@@ -632,7 +640,7 @@ class LinuxHelper(Helper):
             for i in range( 0, numCpus ):
                 if mask[i] == 1:
                     AffinityString += "%s " % i
-            logger().log( AffinityString )
+            if logger().VERBOSE: logger().log( AffinityString )
             return 1
         else:
             AffinityString = " Get_affinity errno::%s"%( errno.value )
@@ -658,7 +666,7 @@ class LinuxHelper(Helper):
 
     def use_efivars(self):
         return os.path.exists("/sys/firmware/efi/efivars/")
- 
+
     def EFI_supported( self):
         return os.path.exists("/sys/firmware/efi/vars/") or os.path.exists("/sys/firmware/efi/efivars/")
 
@@ -712,7 +720,7 @@ class LinuxHelper(Helper):
         guid8 = int(guid[30:32], 16)
         guid9 = int(guid[32:34], 16)
         guid10 = int(guid[34:], 16)
-        
+
         in_buf = struct.pack('13I'+str(namelen)+'s', data_size, guid0, guid1, guid2, guid3, guid4, guid5, guid6, guid7, guid8, guid9, guid10, namelen, name)
         buffer = array.array("c", in_buf)
         stat = self.ioctl(IOCTL_GET_EFIVAR, buffer)
@@ -726,13 +734,13 @@ class LinuxHelper(Helper):
                 stat = self.ioctl(IOCTL_GET_EFIVAR, buffer)
             except IOError:
                 logger().error("IOError IOCTL GetUEFIvar\n")
-                return (off, buf, hdr, None, guid, attr)                    
+                return (off, buf, hdr, None, guid, attr)
             new_size, status = struct.unpack( "2I", buffer[:8])
-            
+
         if (new_size > data_size):
             logger().error( "Incorrect size returned from driver" )
             return (off, buf, hdr, None, guid, attr)
-            
+
         if (status > 0):
             logger().error( "Reading variable (GET_EFIVAR) did not succeed: %s" % status_dict[status])
             data = ""
@@ -743,7 +751,7 @@ class LinuxHelper(Helper):
             attr = struct.unpack( "I", buffer[8:12])[0]
         return (off, buf, hdr, data, guid, attr)
 
-        
+
     def kern_get_EFI_variable(self, name, guid):
         (off, buf, hdr, data, guid, attr) = self.kern_get_EFI_variable_full(name, guid)
         return data
@@ -774,14 +782,14 @@ class LinuxHelper(Helper):
                 (off, buf, hdr, data, guid, attr) = var
                 variables[name].append(var)
         return variables
-    
+
     def kern_set_EFI_variable(self, name, guid, value, attr=0x7):
         status_dict = { 0:"EFI_SUCCESS", 1:"EFI_LOAD_ERROR", 2:"EFI_INVALID_PARAMETER", 3:"EFI_UNSUPPORTED", 4:"EFI_BAD_BUFFER_SIZE", 5:"EFI_BUFFER_TOO_SMALL", 6:"EFI_NOT_READY", 7:"EFI_DEVICE_ERROR", 8:"EFI_WRITE_PROTECTED", 9:"EFI_OUT_OF_RESOURCES", 14:"EFI_NOT_FOUND", 26:"EFI_SECURITY_VIOLATION" }
-        
+
         header_size = 60 # 4*15
         namelen = len(name)
         if value: datalen = len(value)
-        else: 
+        else:
             datalen = 0
             value = '\0'
         data_size = header_size + namelen + datalen
@@ -796,9 +804,9 @@ class LinuxHelper(Helper):
         guid8 = int(guid[30:32], 16)
         guid9 = int(guid[32:34], 16)
         guid10 = int(guid[34:], 16)
-        
+
         in_buf = struct.pack('15I'+str(namelen)+'s'+str(datalen)+'s', data_size, guid0, guid1, guid2, guid3, guid4, guid5, guid6, guid7, guid8, guid9, guid10, attr, namelen, datalen, name, value)
-        buffer = array.array("c", in_buf)        
+        buffer = array.array("c", in_buf)
         stat = self.ioctl(IOCTL_SET_EFIVAR, buffer)
         size, status = struct.unpack( "2I", buffer[:8])
 
@@ -1016,7 +1024,7 @@ class LinuxHelper(Helper):
         tool_name = _tools[ tool_type ] if tool_type in _tools else None
         tool_path = os.path.join( get_tools_path(), self.os_system.lower() )
         return tool_name,tool_path
-  
+
     def getcwd( self ):
         return os.getcwd()
 
@@ -1034,12 +1042,25 @@ class LinuxHelper(Helper):
             if "phys_mem_access_prot" in line:
                return line.split(" ")[0]
 
-    def decompress_data(self, funcs, cdata):
+    def rotate_list(self, list, n):
+        return list[n:] + list[:n]
+
+    def rotate_algorithms(self, CompressionType, n):
+        if(CompressionType == 0x01):
+            self.decompression_oder_type1 = self.rotate_list(self.decompression_oder_type1, n)
+        elif(CompressionType == 0x02):
+            self.decompression_oder_type2 = self.rotate_list(self.decompression_oder_type2, n)
+
+    def decompress_data(self, funcs, cdata, CompressionType):
+        failed_times = 0
         for func in funcs:
             try:
                 data = func(cdata, len(cdata))
-                return  data
+                if(failed_times > 0):
+                    self.rotate_algorithms(CompressionType, failed_times)
+                return data
             except Exception:
+                failed_times += 1
                 continue
         return None
     #
@@ -1050,15 +1071,15 @@ class LinuxHelper(Helper):
         if CompressionType == 0: # not compressed
             shutil.copyfile( CompressedFileName, OutputFileName )
         elif CompressionType == 0x01:
-            data = self.decompress_data( [ EFI, Tiano ], CompressedFileData )
+            data = self.decompress_data( self.decompression_oder_type1, CompressedFileData, CompressionType)
         elif CompressionType == 0x02:
-            data = self.decompress_data( [ LZMA, Tiano, EFI ] , CompressedFileData )
+            data = self.decompress_data( self.decompression_oder_type2, CompressedFileData, CompressionType)
         if CompressionType != 0x00:
             if data is not None:
                 chipsec.file.write_file( OutputFileName, data )
             else:
                 if len(CompressedFileData) > 4:
-                    data = self.decompress_data( [ LZMA, Tiano, EFI ] , CompressedFileData[4:] )
+                    data = self.decompress_data( self.decompression_oder_type2, CompressedFileData[4:], CompressionType )
                     if data is not None:
                         chipsec.file.write_file( OutputFileName, data )
                     else:
